@@ -153,8 +153,20 @@ func (r *Relayer) Loop(ctx context.Context) {
 				log.Info("submitted txEvent to worker pool", "origin_layer2_tx_hash", e.TxHash)
 			}()
 		case receipt := <-r.txReceiptCh:
-
-			log.Info("received tx receipt", "tx_status", receipt.Status)
+			log.Info("received tx receipt", "l1_tx_hash", receipt.TxHash, "status", receipt.Status)
+			go func() {
+				updater, _ := r.EventHandler.UpdateState(ctx, r.Signer, receipt)
+				select {
+				case err := <-updater.Err():
+					log.Info("Error update state", "err", err)
+					return
+				case res := <-updater.Result():
+					// got signed tx
+					log.Info("state updated", "status", res)
+				case <-ctx.Done():
+					return
+				}
+			}()
 		case <-ctx.Done():
 			return
 		}

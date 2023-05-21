@@ -2,7 +2,9 @@ package event
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"math/big"
 	"os"
 	"strings"
 	"sync"
@@ -12,6 +14,7 @@ import (
 	"github.com/MaxeASN/maxe-core/service/txmgr"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -30,6 +33,7 @@ const (
 type Handler interface {
 	Handle(ctx context.Context, abi *abi.ABI)
 	Submit(ctx context.Context, event *TxEvent, receiptCh chan *TxReceipt, signer *Signer) (Submitter, error)
+	UpdateState(ctx context.Context, signer *Signer, receipt *TxReceipt) (Updater, error)
 	Stop(ctx context.Context)
 }
 
@@ -124,6 +128,24 @@ func (eh *EventHandler) Submit(ctx context.Context, event *TxEvent, receiptCh ch
 	}
 }
 
+func (eh *EventHandler) UpdateState(ctx context.Context, signer *Signer, receipt *TxReceipt) (Updater, error) {
+	txStateAbi, _ := MetaData.GetAbi()
+	eh.EventsMu.RLock()
+	event, ok := eh.Events[receipt.L2TxHash]
+	if !ok {
+		return nil, errors.New("l2 tx not found")
+	}
+
+	tsp := &TxStatePara{
+		L2Account: event.TypedData.Account,
+		From:      event.TypedData.From,
+		SeqNum:    event.TypedData.TxInfo.SeqNum,
+		ChainId:   eh.chainId,
+		TxReceipt: *receipt,
+	}
+	return newUpdater(ctx, tsp, txStateAbi, signer, eh.txMgr), nil
+}
+
 func (eh *EventHandler) Stop(ctx context.Context) {
 	err := eh.Client.Close()
 	if err != nil {
@@ -183,6 +205,7 @@ func Loop(work *Work, receiptCh chan *TxReceipt, receiptMgr *txmgr.DefaultTxMana
 		return err
 	}
 	for {
+		// wait for tx receipt
 		receipt, err := receiptMgr.Bankend[work.ChainId].TransactionReceipt(context.Background(), work.SignedTx.L1txHash)
 		if errors.Is(err, ethereum.NotFound) {
 			log.Trace("Transaction not yet mined", "hash", work.SignedTx.L1txHash)
@@ -199,19 +222,20 @@ func Loop(work *Work, receiptCh chan *TxReceipt, receiptMgr *txmgr.DefaultTxMana
 		}
 		r := receipt.(*types.Receipt)
 		log.Info("Got receipt", "L1_tx_hash", work.SignedTx.L1txHash, "blk_num", r.BlockNumber)
+		// check tx status
 		if r.Status == 1 {
 			receiptCh <- &TxReceipt{
-				chainId: work.ChainId,
-				TxHash:  work.SignedTx.L1txHash,
-				Status:  Successful,
+				L2TxHash: work.L2txHash,
+				TxHash:   work.SignedTx.L1txHash,
+				Status:   Successful,
 			}
 			return nil
 		}
 		if r.Status == 0 {
 			receiptCh <- &TxReceipt{
-				chainId: work.ChainId,
-				TxHash:  work.SignedTx.L1txHash,
-				Status:  Failed,
+				L2TxHash: work.L2txHash,
+				TxHash:   work.SignedTx.L1txHash,
+				Status:   Successful,
 			}
 			return nil
 		}
@@ -309,5 +333,96 @@ func (s *SimpleSubmitter) Result() <-chan *Work {
 }
 
 func (s *SimpleSubmitter) Err() <-chan error {
+	return s.err
+}
+
+type UpdateResult struct {
+	L2TxHash string
+	TxState  uint8
+}
+type Updater interface {
+	Result() <-chan *UpdateResult
+	Err() <-chan error
+}
+
+type SimpleUpdater struct {
+	resultCh chan *UpdateResult
+	err      chan error
+}
+
+func newUpdater(ctx context.Context, txState *TxStatePara, abi *abi.ABI, signer *Signer, tm *txmgr.DefaultTxManager) Updater {
+	sr := &SimpleUpdater{
+		resultCh: make(chan *UpdateResult),
+		err:      make(chan error),
+	}
+	txhash := strings.Replace(txState.TxReceipt.TxHash, "0x", "", -1)
+	hashBytes, _ := hex.DecodeString(txhash)
+	log.Info("////////////////////", "txhash", txhash)
+	go func() {
+		for {
+			//pack
+			d, err := abi.Pack("setL1TxState",
+				hashBytes,
+				txState.L2Account,
+				txState.From,
+				txState.SeqNum,
+				big.NewInt(int64(txState.TxReceipt.Status)))
+			if err != nil {
+				sr.err <- err
+				return
+			}
+
+			log.Info("packdata", hex.EncodeToString(d))
+
+			pack := &txmgr.Txpack{
+				ChainId: txState.ChainId,
+				Input:   d,
+				To:      common.HexToAddress("0xEe1190D70d3070eF8b0A51682FBAa615B3D64f36"),
+				Value:   big.NewInt(0),
+				From:    common.HexToAddress("0x111205a6F1ef1410a3F70331A0B2A96A0cf5290D"),
+			}
+
+			tx, err := tm.Craft(ctx, pack)
+			if err != nil {
+				sr.err <- err
+				return
+			}
+
+			// get tx hash
+			hash := strings.Replace(types.LatestSignerForChainID(tx.ChainId()).Hash(tx).Hex(), "0x", "", -1)
+			// sign the tx hash
+			var res RepSignData
+			err = signer.Client.Call(&res, "maxe_sign",
+				pack.ChainId,
+				pack.From,
+				hash)
+			// response error
+			if err != nil {
+				sr.err <- err
+				return
+			}
+
+			signedTx, _ := tm.WithSignature(ctx, tx, res.Signature)
+			// rawtx
+			raw, _ := tm.Raw(ctx, signedTx)
+
+			err = tm.Bankend[pack.ChainId].SendRawTransaction(ctx, raw)
+			if err != nil {
+				sr.err <- err
+				return
+			}
+
+			log.Info("update tx state", "txhash", signedTx.Hash().String(), "data", d)
+			return
+		}
+	}()
+	return sr
+}
+
+func (s *SimpleUpdater) Result() <-chan *UpdateResult {
+	return s.resultCh
+}
+
+func (s *SimpleUpdater) Err() <-chan error {
 	return s.err
 }
