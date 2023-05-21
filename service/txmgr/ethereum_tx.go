@@ -11,15 +11,18 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 type ethereum struct {
 	client  *ethclient.Client
+	c       *rpc.Client
 	chainId uint64
 }
 
 func NewEthBackend(ctx context.Context, chainId uint64, host string) *ethereum {
 	client, err := ethclient.DialContext(ctx, host)
+	r, err := rpc.DialContext(ctx, host)
 	if err != nil {
 		panic(err)
 	}
@@ -27,6 +30,7 @@ func NewEthBackend(ctx context.Context, chainId uint64, host string) *ethereum {
 	return &ethereum{
 		client:  client,
 		chainId: chainId,
+		c:       r,
 	}
 }
 
@@ -42,11 +46,9 @@ func (e *ethereum) BlockNumber(ctx context.Context) (uint64, error) {
 }
 
 func (e *ethereum) NonceAt(ctx context.Context, account any, numberOrTag client.NumberOrTag) (uint64, error) {
-	// parse account
-	address := common.HexToAddress(account.(string))
 	// parse number or tag to number
 	number := toBlockNum(numberOrTag)
-	return e.client.NonceAt(ctx, address, number)
+	return e.client.NonceAt(ctx, account.(common.Address), number)
 }
 
 // deprecated, use NonceAt instead
@@ -59,10 +61,29 @@ func (e *ethereum) EstimateGas(ctx context.Context, call any) (uint64, error) {
 	return e.client.EstimateGas(ctx, callMsg)
 }
 
+func (e *ethereum) SuggestGasPrice(ctx context.Context) (*big.Int, *big.Int, error) {
+	gasTipCap, err := e.client.SuggestGasTipCap(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	head, err := e.client.HeaderByNumber(ctx, nil)
+	_ = head
+	if err != nil {
+		return nil, nil, err
+	}
+	// todo
+	// return gasTipCap, head.BaseFee, err
+	return gasTipCap, big.NewInt(50), nil
+}
+
 func (e *ethereum) SendTransaction(ctx context.Context, tx *Txpack) (string, error) {
 	t := e.packTx(tx)
 	err := e.client.SendTransaction(ctx, t)
 	return t.Hash().String(), err
+}
+
+func (e *ethereum) SendRawTransaction(ctx context.Context, raw string) error {
+	return e.c.CallContext(ctx, nil, "eth_sendRawTransaction", raw)
 }
 
 func (e *ethereum) TransactionReceipt(ctx context.Context, txHash string) (any, error) {

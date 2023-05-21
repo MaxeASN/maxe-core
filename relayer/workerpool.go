@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"github.com/MaxeASN/maxe-core/relayer/event"
+	"github.com/MaxeASN/maxe-core/service/txmgr"
 	"github.com/ethereum/go-ethereum/log"
 )
 
-type Handle func(event *event.SignedTx, receiptCh chan *event.TxReceipt) error
+type Handle func(event *event.Work, receiptCh chan *event.TxReceipt, receiptMgr *txmgr.DefaultTxManager) error
 
 // WorkerPool is a pool of workers. It is used to be thread-safe.
 type WorkerPool struct {
@@ -23,11 +24,13 @@ type WorkerPool struct {
 	stop         chan struct{}
 	workerChPool sync.Pool
 	lock         sync.Mutex
+
+	receiptMgr *txmgr.DefaultTxManager
 }
 
 type workerCh struct {
 	lastUseTime time.Time
-	ch          chan *event.SignedTx
+	ch          chan *event.Work
 	receiptCh   chan *event.TxReceipt
 }
 
@@ -45,7 +48,7 @@ func (wp *WorkerPool) Start() {
 	wp.workerChPool.New = func() any {
 		return &workerCh{
 			lastUseTime: time.Now(),
-			ch:          make(chan *event.SignedTx, wp.MaxWorkers),
+			ch:          make(chan *event.Work, wp.MaxWorkers),
 			receiptCh:   make(chan *event.TxReceipt),
 		}
 	}
@@ -80,7 +83,7 @@ func (wp *WorkerPool) Stop() {
 
 	ready := wp.ready
 	for i := range ready {
-		ready[i].ch <- &event.SignedTx{}
+		ready[i].ch <- &event.Work{}
 		ready[i] = nil
 	}
 	wp.ready = ready
@@ -88,10 +91,11 @@ func (wp *WorkerPool) Stop() {
 }
 
 // NewWorkerPool creates a new worker pool
-func NewWorkerPool(h Handle, worker int, timeout time.Duration) *WorkerPool {
+func NewWorkerPool(h Handle, worker int, timeout time.Duration, cfg *txmgr.Config) *WorkerPool {
 	return &WorkerPool{
 		WorkerFunc:    h,
 		MaxWorkers:    worker,
+		receiptMgr:    txmgr.NewDefaultTxManager(cfg),
 		idleTimeout:   timeout,
 		activeWorkers: 0,
 		canStop:       false,
@@ -101,7 +105,7 @@ func NewWorkerPool(h Handle, worker int, timeout time.Duration) *WorkerPool {
 }
 
 // Serve is the main function of the worker pool. Add a **new work** to the WorkerCh.
-func (wp *WorkerPool) Serve(work *event.SignedTx, receipt chan *event.TxReceipt) bool {
+func (wp *WorkerPool) Serve(work *event.Work, receipt chan *event.TxReceipt) bool {
 	wc := wp.getWorkCh()
 	if wc == nil {
 		return false
@@ -169,9 +173,9 @@ func (wp *WorkerPool) workerFunc(wc *workerCh) {
 		if work == nil {
 			break
 		}
-		log.Info("Workerpool working on", "l2txhash", work.Hash)
+		log.Info("Workerpool working on", "l2txhash", work.L2txHash)
 
-		if err := wp.WorkerFunc(work, wc.receiptCh); err != nil {
+		if err := wp.WorkerFunc(work, wc.receiptCh, wp.receiptMgr); err != nil {
 			log.Error("Error handling work", "err", err)
 		}
 

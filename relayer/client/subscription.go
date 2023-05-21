@@ -18,7 +18,7 @@ func (s *subscription) ID() string {
 }
 
 // fixme: 修复
-func (s *subscription) NotificationCh() chan *Notification {
+func (s *subscription) NotificationCh() <-chan *Notification {
 	return s.notificationCh
 }
 

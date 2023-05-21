@@ -31,8 +31,9 @@ type Config struct {
 func CliFlags() []cli.Flag {
 	return []cli.Flag{
 		cli.StringSliceFlag{
-			Name:  HostsFlagName,
-			Usage: "txmgr hosts flag",
+			Name:     HostsFlagName,
+			Usage:    "txmgr hosts flag",
+			Required: true,
 		},
 		cli.DurationFlag{
 			Name:  TxSendTimeoutFlagName,
@@ -55,9 +56,6 @@ func CliFlags() []cli.Flag {
 // ReadCliConfig reads the txmgr config from the command line context.
 func ReadCliConfig(ctx *cli.Context) *Config {
 	hosts := ctx.GlobalStringSlice(HostsFlagName)
-	if hosts == nil {
-		panic("need to specify txmgr hosts, use --" + HostsFlagName + " flag.")
-	}
 	cfg := &Config{
 		Hosts:                make(map[string]string),
 		TxSendTimeout:        ctx.GlobalDuration(TxSendTimeoutFlagName),

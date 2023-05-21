@@ -52,7 +52,7 @@ type Client interface {
 
 type Subscription interface {
 	ID() string
-	NotificationCh() chan *Notification
+	NotificationCh() <-chan *Notification
 	Unsubscribe() error
 	Stop()
 }

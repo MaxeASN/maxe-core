@@ -114,8 +114,9 @@ func (ws *WsClient) looping() {
 			t, r, err := ws.Endpoint.NextReader()
 			if err != nil {
 				// wg.Done()
-				log.Error("error reading from websocket client", "err", err)
-				return
+				log.Error("error reading from websocket client", "sleep", "20s", "err", err)
+				time.Sleep(20 * time.Second)
+				continue
 			}
 			// check message type
 			if t != websocket.TextMessage {
@@ -125,7 +126,7 @@ func (ws *WsClient) looping() {
 			message, err := io.ReadAll(r)
 			if err != nil {
 				// wg.Done()
-				log.Error("error reading from websocket client", "err", err)
+				log.Error("error reading from websocket reader", "err", err)
 				return
 			}
 			// unmarshal message
