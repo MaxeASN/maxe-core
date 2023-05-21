@@ -116,7 +116,7 @@ func NewRelayer(ctx *cli.Context) *Relayer {
 	return &Relayer{
 		Config:        cfg,
 		TxsEventCh:    make(chan *event.TxEvent, config.TxEventChannelLength),
-		WorkerPool:    NewWorkerPool(event.Loop, 50, cfg.L1Config.Timeout),
+		WorkerPool:    NewWorkerPool(event.Loop, 50, cfg.L1Config.Timeout, cfg.TxMgr),
 		EventListener: el,
 		EventHandler:  eh,
 		Signer:        signer,
@@ -141,18 +141,20 @@ func (r *Relayer) Loop(ctx context.Context) {
 				case err := <-submitter.Err():
 					log.Info("Error submitting event", "err", err)
 					return
-				case signedTx := <-submitter.Result():
-					log.Info("Event submitted", "result", signedTx)
+				case work := <-submitter.Result():
 					// got signed tx
 					// serve signed tx, waiting for tx receipt
-					r.WorkerPool.Serve(signedTx, r.txReceiptCh)
+					r.WorkerPool.Serve(work, r.txReceiptCh)
+					log.Info("Event submitted", "signed_tx", work.SignedTx)
+				case <-ctx.Done():
+					return
 				}
 
-				log.Info("submitted txEvent to worker pool", "Layer2_tx_hash", e.TxHash)
+				log.Info("submitted txEvent to worker pool", "origin_layer2_tx_hash", e.TxHash)
 			}()
 		case receipt := <-r.txReceiptCh:
-			_ = receipt
-			log.Info(">>>>>>>>>>>>>>> received tx receipt", "Layer2_tx_hash", receipt.TxHash)
+
+			log.Info("received tx receipt", "tx_status", receipt.Status)
 		case <-ctx.Done():
 			return
 		}

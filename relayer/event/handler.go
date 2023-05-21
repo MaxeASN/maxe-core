@@ -2,13 +2,17 @@ package event
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/MaxeASN/maxe-core/relayer/client"
 	"github.com/MaxeASN/maxe-core/service/txmgr"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -94,7 +98,9 @@ func (eh *EventHandler) Handle(ctx context.Context, abi *abi.ABI) {
 		case e := <-eh.EventsCh:
 			// todo
 			// store event
+			eh.EventsMu.Lock()
 			eh.Events[e.TxHash] = *e
+			eh.EventsMu.Unlock()
 
 		case <-eh.reConn:
 			endpoint, err := client.NewWsClient(eh.host, "maxe-core event handler", eh.timeout)
@@ -114,7 +120,7 @@ func (eh *EventHandler) Submit(ctx context.Context, event *TxEvent, receiptCh ch
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case eh.EventsCh <- event:
-		return newSubmitter(event, signer), nil
+		return newSubmitter(ctx, event, signer, eh.txMgr), nil
 	}
 }
 
@@ -171,55 +177,134 @@ func (eh *EventHandler) heartBeat(ctx context.Context, connectionCheckTimer *tim
 
 // Loop send signed tx to the workerpool, listen for tx receipt,
 // decode and submit to the receipt channel
-func Loop(signedTx *SignedTx, receiptCh chan *TxReceipt) error {
-	receiptCh <- &TxReceipt{TxHash: signedTx.Hash}
-	return nil
+func Loop(work *Work, receiptCh chan *TxReceipt, receiptMgr *txmgr.DefaultTxManager) error {
+	err := receiptMgr.Bankend[work.ChainId].SendRawTransaction(context.Background(), work.SignedTx.L1RawTx)
+	if err != nil {
+		return err
+	}
+	for {
+		receipt, err := receiptMgr.Bankend[work.ChainId].TransactionReceipt(context.Background(), work.SignedTx.L1txHash)
+		if errors.Is(err, ethereum.NotFound) {
+			log.Trace("Transaction not yet mined", "hash", work.SignedTx.L1txHash)
+			time.Sleep(5 * time.Second)
+			continue
+		} else if err != nil {
+			log.Info("Receipt retrieval failed", "hash", work.SignedTx.L1txHash, "err", err)
+			time.Sleep(5 * time.Second)
+			continue
+		} else if receipt == nil {
+			log.Warn("Receipt and error are both nil", "hash", work.SignedTx.L1txHash)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		r := receipt.(*types.Receipt)
+		log.Info("Got receipt", "L1_tx_hash", work.SignedTx.L1txHash, "blk_num", r.BlockNumber)
+		if r.Status == 1 {
+			receiptCh <- &TxReceipt{
+				chainId: work.ChainId,
+				TxHash:  work.SignedTx.L1txHash,
+				Status:  Successful,
+			}
+			return nil
+		}
+		if r.Status == 0 {
+			receiptCh <- &TxReceipt{
+				chainId: work.ChainId,
+				TxHash:  work.SignedTx.L1txHash,
+				Status:  Failed,
+			}
+			return nil
+		}
+
+	}
+}
+
+type Work struct {
+	L2txHash string `json:"l2txhash"`
+	SignedTx *SignedTx
+	ChainId  uint64 `json:"chainid"`
 }
 
 type SignedTx struct {
-	Hash  string `json:"hash"`
-	RawTx string `json:"tx"`
+	L1txHash string `json:"l1txhash"`
+	L1RawTx  string `json:"tx"`
 }
 
 type Submitter interface {
-	Result() <-chan *SignedTx
+	Result() <-chan *Work
 	Err() <-chan error
 }
 
 type SimpleSubmitter struct {
-	resultCh chan *SignedTx
+	resultCh chan *Work
 	err      chan error
 }
 
-func newSubmitter(e *TxEvent, signer *Signer) Submitter {
+func newSubmitter(ctx context.Context, e *TxEvent, signer *Signer, txmgr *txmgr.DefaultTxManager) Submitter {
 	s := &SimpleSubmitter{
-		resultCh: make(chan *SignedTx),
+		resultCh: make(chan *Work),
 		err:      make(chan error),
 	}
 
-	go s.callForSign(e, signer)
+	go s.callForSign(ctx, e, signer, txmgr)
 	return s
 }
 
-func (s *SimpleSubmitter) callForSign(e *TxEvent, signer *Signer) {
-	var data = "abcd181823182f39786656f159cfb99fa5181823182f3978656f159cfb99fa55"
+func (s *SimpleSubmitter) callForSign(ctx context.Context, e *TxEvent, signer *Signer, tm *txmgr.DefaultTxManager) {
+	// craft tx
+	pack := &txmgr.Txpack{
+		ChainId: e.TypedData.TxInfo.ChainId,
+		Input:   e.TypedData.TxInfo.Data,
+		To:      e.TypedData.TxInfo.Receiver,
+		Value:   e.TypedData.TxInfo.Amount,
+		From:    e.TypedData.TxInfo.From,
+	}
+
+	tx, err := tm.Craft(ctx, pack)
+	if err != nil {
+		s.err <- err
+		return
+	}
+
+	// get tx hash
+	hash := strings.Replace(types.LatestSignerForChainID(tx.ChainId()).Hash(tx).Hex(), "0x", "", -1)
+	// sign the tx hash
 	var res RepSignData
-	err := signer.Client.Call(&res, "maxe_sign",
+	err = signer.Client.Call(&res, "maxe_sign",
 		e.TypedData.TxInfo.ChainId,
 		e.TypedData.From,
-		data)
+		hash)
 	// response error
 	if err != nil {
 		s.err <- err
 		return
 	}
-	s.resultCh <- &SignedTx{
-		Hash:  e.TxHash,
-		RawTx: res.Signature,
+
+	signedTx, err := tm.WithSignature(ctx, tx, res.Signature)
+	if err != nil {
+		s.err <- err
+		return
 	}
+
+	// rawtx
+	raw, err := tm.Raw(ctx, signedTx)
+	if err != nil {
+		s.err <- err
+		return
+	}
+
+	s.resultCh <- &Work{
+		ChainId:  e.TypedData.TxInfo.ChainId,
+		L2txHash: e.TxHash,
+		SignedTx: &SignedTx{
+			L1txHash: signedTx.Hash().String(),
+			L1RawTx:  raw,
+		},
+	}
+
 }
 
-func (s *SimpleSubmitter) Result() <-chan *SignedTx {
+func (s *SimpleSubmitter) Result() <-chan *Work {
 	return s.resultCh
 }
 

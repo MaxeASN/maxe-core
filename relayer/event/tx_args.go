@@ -1,17 +1,38 @@
 package event
 
 import (
-	"context"
-
 	txState "github.com/MaxeASN/maxe-core/relayer/contracts/txstateoracle"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
-type Transaction interface {
-	Create(ctx context.Context, args ...any) (any, error)
+// TransactionArgs represents the arguments to construct a new transaction
+// or a message call.
+type TransactionArgs struct {
+	From                 *common.Address `json:"from"`
+	To                   *common.Address `json:"to"`
+	Gas                  *hexutil.Uint64 `json:"gas"`
+	GasPrice             *hexutil.Big    `json:"gasPrice"`
+	MaxFeePerGas         *hexutil.Big    `json:"maxFeePerGas"`
+	MaxPriorityFeePerGas *hexutil.Big    `json:"maxPriorityFeePerGas"`
+	Value                *hexutil.Big    `json:"value"`
+	Nonce                *hexutil.Uint64 `json:"nonce"`
+
+	// We accept "data" and "input" for backwards-compatibility reasons.
+	// "input" is the newer name and should be preferred by clients.
+	// Issue detail: https://github.com/ethereum/go-ethereum/issues/15628
+	Data  *hexutil.Bytes `json:"data"`
+	Input *hexutil.Bytes `json:"input"`
+
+	AccessList *types.AccessList `json:"accessList,omitempty"`
+	ChainID    *hexutil.Big      `json:"chainId,omitempty"`
 }
 
 type TxReceipt struct {
-	TxHash string `json:"tx_hash"`
+	chainId uint64
+	TxHash  string
+	Status  uint8
 }
 
 type TxEventParams = txState.TxStateL1transferEvent
