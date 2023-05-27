@@ -235,7 +235,7 @@ func Loop(work *Work, receiptCh chan *TxReceipt, receiptMgr *txmgr.DefaultTxMana
 			receiptCh <- &TxReceipt{
 				L2TxHash: work.L2txHash,
 				TxHash:   work.SignedTx.L1txHash,
-				Status:   Successful,
+				Status:   Failed,
 			}
 			return nil
 		}
