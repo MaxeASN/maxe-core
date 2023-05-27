@@ -108,7 +108,7 @@ func NewRelayer(ctx *cli.Context) *Relayer {
 		cfg.L2Config.NetworkTimeout)
 
 	// event handler
-	eh := event.NewEventHandler(config.DefaultL2WsHost, cfg.L2Config.ChainId, cfg.L2Config.NetworkTimeout, cfg.TxMgr)
+	eh := event.NewEventHandler(cfg.L2Config.Host, cfg.L2Config.ChainId, cfg.L2Config.NetworkTimeout, cfg.TxMgr)
 
 	// signer client, currently not used tls
 	signer := event.NewSigner(cfg.Signer.Host, nil)
