@@ -132,6 +132,7 @@ func (eh *EventHandler) UpdateState(ctx context.Context, signer *Signer, receipt
 	txStateAbi, _ := MetaData.GetAbi()
 	eh.EventsMu.RLock()
 	event, ok := eh.Events[receipt.L2TxHash]
+	eh.EventsMu.RUnlock()
 	if !ok {
 		return nil, errors.New("l2 tx not found")
 	}
