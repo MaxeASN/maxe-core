@@ -47,8 +47,10 @@ func NewDefaultTxManager(cfg *Config) *DefaultTxManager {
 	}
 	ctx := context.Background()
 	// todo: add const params for chainIds
-	txMgr.register(10950, NewEthBackend(ctx, 10950, cfg.Hosts["eth"]))
-	txMgr.register(23328, NewEthBackend(ctx, 23328, cfg.Hosts["eth"]))
+	txMgr.register(10950, NewEthBackend(ctx, 10950, cfg.Hosts["ethtest"]))
+	txMgr.register(23328, NewEthBackend(ctx, 23328, cfg.Hosts["l1geth"]))
+	txMgr.register(3328, NewEthBackend(ctx, 3328, cfg.Hosts["opgeth"]))
+	txMgr.register(5, NewEthBackend(ctx, 5, cfg.Hosts["goerli"]))
 	// txMgr.register(10, NewOpBackend(ctx, 10, cfg.Hosts["op"]))
 	return txMgr
 }
@@ -62,7 +64,6 @@ func (m *DefaultTxManager) Send(ctx context.Context, chainId uint64, tx *Txpack)
 }
 
 func (m *DefaultTxManager) Craft(ctx context.Context, tx *Txpack) (*types.Transaction, error) {
-	log.Info(">>>>>>>", "tx craft", tx.ChainId)
 	m.lock.RLock()
 	backend, ok := m.Bankend[tx.ChainId]
 	m.lock.RUnlock()
@@ -76,8 +77,6 @@ func (m *DefaultTxManager) Craft(ctx context.Context, tx *Txpack) (*types.Transa
 	}
 	gasFeeCap := new(big.Int).Add(tip, new(big.Int).Mul(basefee, big.NewInt(2)))
 	nonce, _ := backend.NonceAt(ctx, tx.From, client.NumberOrTag{Tag: client.TagPending})
-	log.Info("?>?>?>?>?", "nonce", nonce)
-	log.Info("?>?>?>?>?", "maxfeepergas", gasFeeCap.Uint64(), "tip", tip.Uint64())
 	rawTx := &types.DynamicFeeTx{
 		ChainID:    big.NewInt(int64(tx.ChainId)),
 		Nonce:      nonce,
@@ -101,7 +100,6 @@ func (m *DefaultTxManager) Craft(ctx context.Context, tx *Txpack) (*types.Transa
 	}
 
 	rawTx.Gas = gas
-	log.Info("<<<", "gas", gas)
 
 	newTx := types.NewTx(rawTx)
 
