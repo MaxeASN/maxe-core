@@ -30,9 +30,17 @@ type TransactionArgs struct {
 }
 
 type TxReceipt struct {
-	chainId uint64
-	TxHash  string
-	Status  uint8
+	L2TxHash string
+	TxHash   string
+	Status   uint8
+}
+
+type TxStatePara struct {
+	L2Account common.Address
+	From      common.Address
+	ChainId   uint64
+	SeqNum    uint64
+	TxReceipt
 }
 
 type TxEventParams = txState.TxStateL1transferEvent

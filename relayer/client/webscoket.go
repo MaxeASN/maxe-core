@@ -303,9 +303,10 @@ func (ws *WsClient) Subscribe(ctx context.Context, req *Request) (Subscription, 
 
 func (ws *WsClient) ChainId(ctx context.Context) (uint64, error) {
 	request := Request{
-		ID:     1,
-		Method: "eth_chainId",
-		Params: []json.RawMessage{},
+		ID:      1,
+		Jsonrpc: "2.0",
+		Method:  "eth_chainId",
+		Params:  []json.RawMessage{},
 	}
 	res, err := ws.Request(ctx, &request)
 	if err != nil {
