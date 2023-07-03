@@ -66,14 +66,13 @@ func (e *ethereum) SuggestGasPrice(ctx context.Context) (*big.Int, *big.Int, err
 	if err != nil {
 		return nil, nil, err
 	}
-	head, err := e.client.HeaderByNumber(ctx, nil)
-	_ = head
+	header, err := e.client.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	// todo
-	// return gasTipCap, head.BaseFee, err
-	return gasTipCap, big.NewInt(50), nil
+	return gasTipCap, header.BaseFee, err
+	// return gasTipCap, big.NewInt(50), nil
 }
 
 func (e *ethereum) SendTransaction(ctx context.Context, tx *Txpack) (string, error) {
