@@ -93,6 +93,7 @@ func (m *DefaultTxManager) Craft(ctx context.Context, tx *Txpack) (*types.Transa
 		To:        &tx.To,
 		GasFeeCap: gasFeeCap,
 		GasTipCap: tip,
+		Value:     tx.Value,
 		Data:      tx.Input,
 	})
 	if err != nil {
